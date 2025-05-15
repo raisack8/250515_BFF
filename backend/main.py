@@ -14,6 +14,7 @@ class Item(BaseModel):
 items_db = [
     Item(id=1, name="Item 1", description="This is item 1"),
     Item(id=2, name="Item 2", description="This is item 2"),
+    Item(id=3, name="Item 3", description="This is item 3"),
 ]
 
 @app.get("/")

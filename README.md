@@ -28,8 +28,8 @@ The BFF pattern provides several benefits:
 ### Backend
 
 ```bash
+source .venv/Scripts/activate
 cd backend
-pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
@@ -38,8 +38,8 @@ The backend server will start on http://localhost:8000
 ### BFF (Backend For Frontend)
 
 ```bash
+source .venv/Scripts/activate
 cd bff
-pip install -r requirements.txt
 uvicorn main:app --reload --port 8001
 ```
 
@@ -89,3 +89,6 @@ For a production environment, consider:
 - Adding rate limiting and additional security measures
 - Using Docker for containerization
 - Setting up proper monitoring and logging 
+
+ユーザー名: testuser
+パスワード: password

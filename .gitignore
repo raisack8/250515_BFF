@@ -48,3 +48,5 @@ frontend/out
 
 backend/.venv
 bff/.venv
+.venv
+__pycache__
