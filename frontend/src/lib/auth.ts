@@ -10,6 +10,14 @@ export interface User {
   roles: string[];
 }
 
+// BFFからのエラーレスポンスの型定義
+export interface BffErrorResponse {
+  status_code: number;
+  message: string;
+  details?: any;
+  error_code?: string;
+}
+
 export interface AuthContextType {
   user: User | null;
   isLoading: boolean;
@@ -49,6 +57,7 @@ export const checkAuth = async (): Promise<User | null> => {
       const user = await response.json();
       return user;
     }
+    
     return null;
   } catch (error) {
     console.error('Auth check error:', error);
@@ -72,7 +81,10 @@ export const loginUser = async (username: string, password: string): Promise<Use
       const data = await response.json();
       return data.user;
     }
-    throw new Error('Login failed');
+    
+    // エラーレスポンスを処理
+    const errorData = await response.json() as BffErrorResponse;
+    throw new Error(errorData.message || 'ログインに失敗しました');
   } catch (error) {
     console.error('Login error:', error);
     throw error;
@@ -82,10 +94,20 @@ export const loginUser = async (username: string, password: string): Promise<Use
 // Logout function
 export const logoutUser = async (): Promise<void> => {
   try {
-    await fetch(`${BFF_API_URL}/auth/logout`, {
+    const response = await fetch(`${BFF_API_URL}/auth/logout`, {
       method: 'GET',
       credentials: 'include', // Important for cookies
     });
+    
+    if (!response.ok) {
+      // エラーレスポンスを処理
+      try {
+        const errorData = await response.json() as BffErrorResponse;
+        console.error('Logout error:', errorData);
+      } catch (e) {
+        console.error('Logout failed:', response.status, response.statusText);
+      }
+    }
   } catch (error) {
     console.error('Logout error:', error);
   }

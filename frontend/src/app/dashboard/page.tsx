@@ -14,6 +14,14 @@ interface Item {
   description: string | null;
 }
 
+// BFFからのエラーレスポンスの型定義
+interface BffErrorResponse {
+  status_code: number;
+  message: string;
+  details?: any;
+  error_code?: string;
+}
+
 export default function Dashboard() {
   const { user, isLoading, isAuthenticated, logout } = useAuth();
   const [items, setItems] = useState<Item[]>([]);
@@ -35,6 +43,8 @@ export default function Dashboard() {
 
       setItemsLoading(true);
       try {
+        // BFFの新しいエンドポイントではバックエンドのパスをそのまま使う
+        // /api/items から /api/items に変更 (バックエンドは /items)
         const response = await fetch(`${BFF_API_URL}/api/items`, {
           method: 'GET',
           credentials: 'include', // Important for cookies
@@ -47,7 +57,14 @@ export default function Dashboard() {
           const data = await response.json();
           setItems(data);
         } else {
-          setError('Failed to fetch items');
+          // 新しいエラー形式を処理
+          try {
+            const errorData = await response.json() as BffErrorResponse;
+            setError(errorData.message || '未知のエラーが発生しました');
+            console.error('API Error:', errorData);
+          } catch {
+            setError(`Failed to fetch items: ${response.status} ${response.statusText}`);
+          }
         }
       } catch (err) {
         console.error('Error fetching items:', err);
@@ -122,7 +139,10 @@ export default function Dashboard() {
               {itemsLoading ? (
                 <p className="mt-4 text-gray-600">Loading items...</p>
               ) : error ? (
-                <p className="mt-4 text-red-600">{error}</p>
+                <div className="mt-4 p-4 bg-red-50 rounded-md text-red-600">
+                  <p className="font-semibold">エラー</p>
+                  <p>{error}</p>
+                </div>
               ) : (
                 <div className="mt-4 overflow-hidden border border-gray-200 rounded-md shadow-sm">
                   <table className="min-w-full divide-y divide-gray-200">
