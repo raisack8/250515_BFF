@@ -1,5 +1,6 @@
 // Authentication related types and utilities
 import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
+import { fetchWithErrorHandling, ApiError } from './api';
 
 // BFF API URL
 const BFF_API_URL = 'http://localhost:8001';
@@ -45,21 +46,14 @@ export interface AuthProviderProps {
 // Function to check if user is authenticated
 export const checkAuth = async (): Promise<User | null> => {
   try {
-    const response = await fetch(`${BFF_API_URL}/auth/me`, {
-      method: 'GET',
-      credentials: 'include', // Important for cookies
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (response.ok) {
-      const user = await response.json();
-      return user;
-    }
-    
-    return null;
+    const user = await fetchWithErrorHandling(`${BFF_API_URL}/auth/me`);
+    return user;
   } catch (error) {
+    // 401エラーは通常のフローとして扱う（未認証）
+    if (error instanceof ApiError && error.statusCode === 401) {
+      return null;
+    }
+    // その他のエラーはコンソールに記録
     console.error('Auth check error:', error);
     return null;
   }
@@ -68,23 +62,12 @@ export const checkAuth = async (): Promise<User | null> => {
 // Login function
 export const loginUser = async (username: string, password: string): Promise<User | null> => {
   try {
-    const response = await fetch(`${BFF_API_URL}/auth/login`, {
+    const data = await fetchWithErrorHandling(`${BFF_API_URL}/auth/login`, {
       method: 'POST',
-      credentials: 'include', // Important for cookies
-      headers: {
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({ username, password }),
     });
-
-    if (response.ok) {
-      const data = await response.json();
-      return data.user;
-    }
     
-    // エラーレスポンスを処理
-    const errorData = await response.json() as BffErrorResponse;
-    throw new Error(errorData.message || 'ログインに失敗しました');
+    return data.user;
   } catch (error) {
     console.error('Login error:', error);
     throw error;
@@ -94,22 +77,10 @@ export const loginUser = async (username: string, password: string): Promise<Use
 // Logout function
 export const logoutUser = async (): Promise<void> => {
   try {
-    const response = await fetch(`${BFF_API_URL}/auth/logout`, {
-      method: 'GET',
-      credentials: 'include', // Important for cookies
-    });
-    
-    if (!response.ok) {
-      // エラーレスポンスを処理
-      try {
-        const errorData = await response.json() as BffErrorResponse;
-        console.error('Logout error:', errorData);
-      } catch (e) {
-        console.error('Logout failed:', response.status, response.statusText);
-      }
-    }
+    await fetchWithErrorHandling(`${BFF_API_URL}/auth/logout`);
   } catch (error) {
-    console.error('Logout error:', error);
+    // ログアウト失敗はエラーとして扱わない（セッションが既に切れている可能性）
+    console.warn('Logout error (non-critical):', error);
   }
 };
 
