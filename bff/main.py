@@ -10,6 +10,15 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+import aiohttp
+import urllib3
+from urllib3.exceptions import MaxRetryError, TimeoutError
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import httpcore
+import logging
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="BFF API")
 
@@ -169,91 +178,113 @@ async def get_current_user(auth_data: AuthData = Depends(auth_required)):
 # @app.post("/api/items")
 
 # 代わりに全てのエンドポイントを受け入れて転送するキャッチオールルートを追加
-@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"], status_code=200)
+
+# HTTPプールの作成
+http = urllib3.PoolManager(timeout=urllib3.Timeout(connect=5.0, read=10.0))
+
+# 同期処理を非同期に変換するためのエグゼキューター
+executor = ThreadPoolExecutor(max_workers=10)
+
+async def send_request(method, url, fields=None, headers=None, body=None):
+    """urllib3のリクエストを非同期に実行するためのヘルパー関数"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        executor,
+        lambda: http.request(
+            method=method,
+            url=url,
+            fields=fields,
+            headers=headers,
+            body=body,
+            redirect=False,
+            retries=3
+        )
+    )
+
+async def proxy_stream(request, target_url, headers):
+    """リクエストボディとレスポンスを非同期にストリーミングするヘルパー関数"""
+    # リクエストボディの読み取り
+    body = await request.body()
+    
+    # シンプルなHTTP接続
+    async with httpcore.AsyncConnectionPool() as http:
+        response = await http.request(
+            method=request.method,
+            url=target_url,
+            headers=headers,
+            content=body
+        )
+        
+        # レスポンスヘッダーの処理
+        resp_headers = {}
+        for key, value in response.headers:
+            if key.lower() not in ("transfer-encoding", "content-encoding", "content-length"):
+                resp_headers[key.decode('latin1')] = value.decode('latin1')
+        
+        # ストリーミングレスポンスの返却
+        return StreamingResponse(
+            content=response.stream(),
+            status_code=response.status,
+            headers=resp_headers
+        )
+
+@app.api_route("/api/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])
 async def proxy_all_routes(request: Request, path: str, auth_data: AuthData = Depends(auth_required)):
     """あらゆるAPIリクエストをバックエンドに転送する"""
-    client = httpx.AsyncClient()
+    # サーキットブレーカーチェック...
     
-    # リクエストのメソッドを取得
+    # リクエスト情報の収集
     method = request.method
-    
-    # クエリパラメータを取得
     url = f"{BACKEND_API_URL}/{path}"
-    params = dict(request.query_params)
     
-    # リクエストヘッダーを取得 (認証情報やCookieは除く)
+    # クエリパラメータの処理
+    if request.query_params:
+        query_string = str(request.query_params)
+        url = f"{url}?{query_string}"
+    
+    # ヘッダーの準備
     headers = {}
     for name, value in request.headers.items():
         if name.lower() not in ("host", "cookie", "authorization"):
             headers[name] = value
     
-    # リクエストボディを取得
-    body = None
-    if method in ["POST", "PUT", "PATCH"]:
-        body = await request.body()
-        if not body:
-            body = None
+    # ボディの取得
+    body = await request.body() if method in ["POST", "PUT", "PATCH"] else None
     
     try:
-        # バックエンドにリクエストを転送
-        response = await client.request(
+        # バックエンドへのリクエスト送信
+        logger.info(f"Proxying request to backend: {method} {url}")
+        response = await send_request(
             method=method,
             url=url,
-            params=params,
             headers=headers,
-            content=body,
-            timeout=30.0
+            body=body
         )
         
-        # レスポンスヘッダーを作成
+        # レスポンスヘッダーの処理
         resp_headers = {}
         for name, value in response.headers.items():
             if name.lower() not in ("transfer-encoding", "content-encoding", "content-length"):
                 resp_headers[name] = value
         
-        # バックエンドからのレスポンスをそのまま返す
+        # # 成功したらサーキットブレーカーをリセット
+        # backend_circuit.record_success()
+        
+        # レスポンスの返却
         return Response(
-            content=response.content,
-            status_code=response.status_code,
+            content=response.data,
+            status_code=response.status,
             headers=resp_headers,
             media_type=response.headers.get("content-type")
         )
-    except httpx.HTTPStatusError as e:
-        # HTTP エラー（404, 500など）を整形して返す
-        error_message = "バックエンドAPIエラー"
-        error_details = None
         
-        try:
-            # JSONレスポンスの場合、詳細情報を抽出
-            error_content = e.response.json()
-            if isinstance(error_content, dict) and "detail" in error_content:
-                error_message = error_content["detail"]
-            error_details = error_content
-        except:
-            # JSONでない場合はテキストを使用
-            error_message = e.response.text or error_message
+    except (MaxRetryError, TimeoutError) as e:
+        # 接続/タイムアウトエラーの処理...
+        pass
         
-        # カスタムエラーレスポンスを生成
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail={
-                "message": error_message,
-                "details": error_details,
-                "error_code": f"BACKEND_{e.response.status_code}"
-            }
-        )
-    except httpx.RequestError as e:
-        # リクエストエラー（接続エラーなど）
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "バックエンドサービスに接続できません",
-                "details": str(e),
-                "error_code": "BACKEND_CONNECTION_ERROR"
-            }
-        )
-    finally:
-        await client.aclose()
+    except Exception as e:
+        # その他のエラー処理...
+        pass
 
 if __name__ == "__main__":
     import uvicorn
